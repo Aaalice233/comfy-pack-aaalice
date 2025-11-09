@@ -917,6 +917,7 @@ async function packageAction() {
       workflow_api,
       files: result.files,
       system_packages: result.systemPackages,
+      filename: result.filename,  // Include filename for custom naming
       client_id: api.clientId  // Include client_id for WebSocket routing
     });
 

@@ -331,7 +331,15 @@ async def pack_workspace(request):
         if file.is_file() and file.stat().st_ctime < older_than_1h:
             file.unlink()
 
-    zip_filename = f"{uuid.uuid4()}.zip"
+    # 使用用户指定的文件名，如果没有则使用uuid
+    user_filename = data.get("filename", "").strip()
+    if user_filename:
+        # 清理文件名，移除非法字符
+        import re
+        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', user_filename)
+        zip_filename = f"{safe_filename}.cpack.zip"
+    else:
+        zip_filename = f"{uuid.uuid4()}.zip"
 
     with zipfile.ZipFile(TEMP_FOLDER / zip_filename, "w") as zf:
         path = zipfile.Path(zf)
