@@ -815,59 +815,6 @@ function createDownloadModal() {
   };
 }
 
-async function unpackAction() {
-  const modal = document.createElement("div");
-  modal.className = "cpack-modal";
-  modal.style.width = "500px";
-
-  const title = document.createElement("div");
-  title.textContent = "Unpack Instructions";
-  title.className = "cpack-title";
-
-  const content = document.createElement("div");
-  content.innerHTML = `
-    <div style="margin-bottom: 20px;">
-      <p style="margin-bottom: 15px;">To unpack a workflow package, follow these steps:</p>
-
-      <div style="margin-bottom: 15px;">
-        <p style="margin-bottom: 10px;">1. Install comfy-pack CLI:</p>
-        <div class="cpack-copyable" style="margin: 10px 0;">
-          <span style="font-family: monospace;">pip install comfy-pack</span>
-          <button class="cpack-btn" onclick="navigator.clipboard.writeText('pip install comfy-pack')" style="padding: 2px 8px;">
-            Copy
-          </button>
-        </div>
-      </div>
-
-    <div>
-      <p style="margin-bottom: 10px;">2. Run the unpack command:</p>
-      <div class="cpack-copyable" style="margin: 10px 0;">
-        <span style="font-family: monospace;">comfy-pack unpack &lt;your-app&gt;.cpack.zip</span>
-        <button class="cpack-btn" onclick="navigator.clipboard.writeText('comfy-pack unpack')" style="padding: 2px 8px;">
-          Copy
-        </button>
-      </div>
-    </div>
-        </div>
-      `;
-
-  const buttonContainer = document.createElement("div");
-  buttonContainer.className = "cpack-btn-container";
-
-  const closeButton = document.createElement("button");
-  closeButton.textContent = "Close";
-  closeButton.className = "cpack-btn";
-
-  buttonContainer.appendChild(closeButton);
-
-  modal.appendChild(title);
-  modal.appendChild(content);
-  modal.appendChild(buttonContainer);
-
-  const { close } = createModal(modal);
-  closeButton.onclick = close;
-}
-
 async function packageAction() {
   if (document.getElementById("input-modal")) return;
   if (document.getElementById("download-modal")) return;
@@ -1459,11 +1406,6 @@ app.registerExtension({
     packButton.onclick = packageAction;
     menu.append(packButton);
 
-    const unpackButton = document.createElement("button");
-    unpackButton.textContent = "Unpack";
-    unpackButton.onclick = unpackAction;
-    menu.append(unpackButton);
-
     const serveButton = document.createElement("button");
     serveButton.textContent = "Serve";
     serveButton.onclick = serveAction;
@@ -1479,7 +1421,7 @@ app.registerExtension({
     try {
       // new style Manager buttons
 
-      // unload models button into new style Manager button
+      // Package button into new style Manager button
       let cmGroup1 = new (await import("../../scripts/ui/components/buttonGroup.js")).ComfyButtonGroup(
         new (await import("../../scripts/ui/components/button.js")).ComfyButton({
           icon: "package-variant-closed",
@@ -1487,13 +1429,6 @@ app.registerExtension({
           tooltip: "Comfy-Pack",
           content: "Package",
           classList: "comfyui-button comfyui-menu-mobile-collapse primary"
-        }).element,
-        new (await import("../../scripts/ui/components/button.js")).ComfyButton({
-          icon: "package-variant",
-          action: unpackAction,
-          tooltip: "Comfy-Pack",
-          content: "Unpack",
-          classList: "comfyui-button comfyui-menu-mobile-collapse"
         }).element,
       );
 
