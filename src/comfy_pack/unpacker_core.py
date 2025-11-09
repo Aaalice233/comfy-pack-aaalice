@@ -1260,10 +1260,28 @@ def install_dependencies_to_existing(
     log_callback: Optional[Callable[[str], None]] = None
 ) -> bool:
     """安装或更新 Python 依赖"""
+    # 已知的非标准 pip 包（通常由插件自己处理）
+    KNOWN_NON_PIP_PACKAGES = {
+        'SAM-2',  # ComfyUI-SAM2 插件自带
+        'segment-anything-2',
+    }
+    
     to_install = deps_diff['to_install']
     to_update = deps_diff['to_update']
     
     all_packages = to_install + [item['spec'] for item in to_update]
+    
+    # 分离标准包和非标准包
+    standard_packages = []
+    non_standard_packages = []
+    
+    for pkg in all_packages:
+        pkg_name = pkg.split('==')[0].split('>=')[0].split('<=')[0].strip()
+        if pkg_name in KNOWN_NON_PIP_PACKAGES:
+            non_standard_packages.append(pkg)
+        else:
+            standard_packages.append(pkg)
+    
     total = len(all_packages)
     
     if total == 0:
@@ -1272,46 +1290,55 @@ def install_dependencies_to_existing(
         return True
     
     if log_callback:
-        log_callback(f"准备安装/更新 {total} 个依赖包...")
+        log_callback(f"准备安装/更新 {len(standard_packages)} 个依赖包...")
+        if non_standard_packages:
+            log_callback(f"  （跳过 {len(non_standard_packages)} 个非标准包: {', '.join([p.split('==')[0] for p in non_standard_packages])}）")
     
-    # 批量安装
-    try:
-        if progress_callback:
-            progress_callback(0, total, "安装依赖包...")
-        
-        cmd = [str(python_exe), "-m", "pip", "install", "--upgrade"] + all_packages
-        
-        if log_callback:
-            log_callback(f"执行: pip install --upgrade {' '.join(all_packages[:3])}{'...' if len(all_packages) > 3 else ''}")
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600
-        )
-        
-        if result.returncode != 0:
+    # 批量安装标准包
+    if standard_packages:
+        try:
+            if progress_callback:
+                progress_callback(0, total, "安装依赖包...")
+            
+            cmd = [str(python_exe), "-m", "pip", "install", "--upgrade"] + standard_packages
+            
             if log_callback:
-                log_callback(f"安装失败:\n{result.stderr}")
-            return False
+                log_callback(f"执行: pip install --upgrade {' '.join(standard_packages[:3])}{'...' if len(standard_packages) > 3 else ''}")
+            
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+            
+            if result.returncode != 0:
+                if log_callback:
+                    log_callback(f"⚠ 部分依赖安装失败:\n{result.stderr[:500]}")
+                    log_callback("  提示: 某些依赖可能由插件自动处理，可以尝试启动 ComfyUI 测试")
+                # 不返回 False，继续执行
+            
+            if progress_callback:
+                progress_callback(total, total, "完成")
+            
+            if log_callback:
+                if result.returncode == 0:
+                    log_callback("✓ 所有依赖安装完成")
+                else:
+                    log_callback("⚠ 依赖安装完成（部分失败）")
         
-        if progress_callback:
-            progress_callback(total, total, "完成")
-        
-        if log_callback:
-            log_callback("✓ 所有依赖安装完成")
-        
-        return True
+        except subprocess.TimeoutExpired:
+            if log_callback:
+                log_callback("⚠ 安装超时，但可以继续")
+        except Exception as e:
+            if log_callback:
+                log_callback(f"⚠ 安装警告: {e}")
     
-    except subprocess.TimeoutExpired:
-        if log_callback:
-            log_callback("✗ 安装超时")
-        return False
-    except Exception as e:
-        if log_callback:
-            log_callback(f"✗ 安装错误: {e}")
-        return False
+    # 对于非标准包，显示提示信息
+    if non_standard_packages and log_callback:
+        log_callback(f"ℹ 已跳过 {len(non_standard_packages)} 个非标准包（通常由插件自动安装）")
+    
+    return True  # 总是返回 True，让解包继续
 
 
 def copy_input_files(
