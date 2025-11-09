@@ -240,7 +240,7 @@ class FileTreeList {
 
   init() {
     this.container.classList.add('cpack-tree-list');
-  this.state.subscribe(() => this.updateCount());
+    this.state.subscribe(() => this.updateCount());
   }
 
   async load() {
@@ -258,14 +258,14 @@ class FileTreeList {
 
       this.renderTree(this.buildTree(files));
 
-    // 更新所有父目录的状态
-    this.container.querySelectorAll("[data-action='check-dir']").forEach(checkbox => {
-      this.updateFolderState(checkbox);
-    });
+      // 更新所有父目录的状态
+      this.container.querySelectorAll("[data-action='check-dir']").forEach(checkbox => {
+        this.updateFolderState(checkbox);
+      });
 
-    // 更新总数
-    this.updateCount();
-    } catch(e) {
+      // 更新总数
+      this.updateCount();
+    } catch (e) {
       this.container.innerHTML = `<div style="color: #ff8383">Failed to load files: ${e.message}</div>`;
     }
   }
@@ -298,8 +298,8 @@ class FileTreeList {
             badges: file.badges || [],
             checked: file.checked || false
           });
-        // 对文件按名称排序
-        current.files.sort((a, b) => a.name.localeCompare(b.name));
+          // 对文件按名称排序
+          current.files.sort((a, b) => a.name.localeCompare(b.name));
         } else {
           // 这是目录
           if (!current.children[part]) {
@@ -369,7 +369,7 @@ class FileTreeList {
                 ${this.state.isSelected(file.path) || file.checked ? 'checked' : ''} />
               <span>${file.name}</span>
               ${file.badges ? file.badges.map(badge =>
-                `<span style="background: ${badge.color || '#00a67d33'};
+          `<span style="background: ${badge.color || '#00a67d33'};
                   color: ${badge.textColor || '#00a67d'};
                   padding: 2px 6px;
                   border-radius: 4px;
@@ -377,7 +377,7 @@ class FileTreeList {
                   cursor: help;
                   white-space: nowrap;"
                   title="${badge.tooltip || ''}">${badge.text}</span>`
-              ).join('') : ''}
+        ).join('') : ''}
             </label>
           </div>
         `;
@@ -437,9 +437,9 @@ class FileTreeList {
           // 更新UI
           children.querySelectorAll("input[type='checkbox']").forEach(child => {
             child.checked = e.target.checked;
-          if (child.hasAttribute('data-action')) {
-            child.indeterminate = false;
-          }
+            if (child.hasAttribute('data-action')) {
+              child.indeterminate = false;
+            }
           });
         }
 
@@ -465,13 +465,13 @@ class FileTreeList {
       checkbox.addEventListener('change', (e) => {
         this.state.toggle(e.target.value, e.target.checked);
 
-      // 更新父文件夹状态
-      const parentFolder = checkbox.closest('.cpack-tree-children')
-        ?.previousElementSibling
-        ?.querySelector("[data-action='check-dir']");
-      if (parentFolder) {
-        this.updateFolderState(parentFolder);
-      }
+        // 更新父文件夹状态
+        const parentFolder = checkbox.closest('.cpack-tree-children')
+          ?.previousElementSibling
+          ?.querySelector("[data-action='check-dir']");
+        if (parentFolder) {
+          this.updateFolderState(parentFolder);
+        }
       });
     });
   }
@@ -518,7 +518,7 @@ class ModelList {
       const data = await resp.json();
       const models = Array.isArray(data) ? data : (data.models || []);
       this.renderModels(this.sortModels(models));
-    } catch(e) {
+    } catch (e) {
       this.container.innerHTML = `<div style="color: #ff8383">Failed to load models: ${e.message}</div>`;
     }
   }
@@ -693,7 +693,6 @@ async function createPackModal() {
         close();
         resolve({
           filename,
-          models: selectedData.models,
           files: selectedData.files,
           systemPackages: selectedData.systemPackages
         });
@@ -748,16 +747,70 @@ function createDownloadModal() {
   `;
 
   progress.appendChild(progressBar);
+
+  // Log container
+  const logContainer = document.createElement("div");
+  logContainer.style.cssText = `
+    height: 150px;
+    overflow-y: auto;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 5px;
+    padding: 8px;
+    margin-top: 15px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+  `;
+
+  // Time display
+  const timeDisplay = document.createElement("div");
+  timeDisplay.style.cssText = `
+    margin-top: 10px;
+    color: #888;
+    font-size: 0.9em;
+    text-align: center;
+  `;
+  timeDisplay.textContent = "已用时间: 0s | 预计剩余: --";
+
   modal.appendChild(title);
   modal.appendChild(hint);
   modal.appendChild(progress);
+  modal.appendChild(logContainer);
+  modal.appendChild(timeDisplay);
 
   const { close } = createModal(modal);
+
+  const startTime = Date.now();
 
   return {
     updateProgress: (percent) => {
       progressBar.style.width = `${percent}%`;
     },
+    addLog: (message, level = "info") => {
+      const logEntry = document.createElement("div");
+      logEntry.style.marginBottom = "3px";
+
+      // Color based on level
+      let color = "#aaa"; // default info
+      if (level === "success") color = "#4ade80";
+      else if (level === "progress") color = "#fbbf24";
+      else if (level === "cache") color = "#fb923c";
+      else if (level === "info") color = "#60a5fa";
+
+      const timestamp = new Date().toLocaleTimeString();
+      logEntry.innerHTML = `<span style="color: #666;">[${timestamp}]</span> <span style="color: ${color};">${message}</span>`;
+
+      logContainer.appendChild(logEntry);
+      // Auto scroll to bottom
+      logContainer.scrollTop = logContainer.scrollHeight;
+    },
+    updateTime: (elapsed, eta) => {
+      const elapsedStr = elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`;
+      const etaStr = eta > 0 ? (eta < 60 ? `${Math.floor(eta)}s` : `${Math.floor(eta / 60)}m ${Math.floor(eta % 60)}s`) : "--";
+      timeDisplay.textContent = `已用时间: ${elapsedStr} | 预计剩余: ${etaStr}`;
+    },
+    getStartTime: () => startTime,
     close
   };
 }
@@ -798,21 +851,21 @@ async function unpackAction() {
         </div>
       `;
 
-    const buttonContainer = document.createElement("div");
-    buttonContainer.className = "cpack-btn-container";
+  const buttonContainer = document.createElement("div");
+  buttonContainer.className = "cpack-btn-container";
 
-      const closeButton = document.createElement("button");
-      closeButton.textContent = "Close";
-      closeButton.className = "cpack-btn";
+  const closeButton = document.createElement("button");
+  closeButton.textContent = "Close";
+  closeButton.className = "cpack-btn";
 
-      buttonContainer.appendChild(closeButton);
+  buttonContainer.appendChild(closeButton);
 
-      modal.appendChild(title);
-      modal.appendChild(content);
-      modal.appendChild(buttonContainer);
+  modal.appendChild(title);
+  modal.appendChild(content);
+  modal.appendChild(buttonContainer);
 
-      const { close } = createModal(modal);
-      closeButton.onclick = close;
+  const { close } = createModal(modal);
+  closeButton.onclick = close;
 }
 
 async function packageAction() {
@@ -823,37 +876,78 @@ async function packageAction() {
 
   const downloadModal = createDownloadModal();
 
+  // Setup WebSocket progress listener
+  const progressHandler = (event) => {
+    const { data } = event.detail;
+    if (data && data.type === "pack_progress") {
+      const progressData = data.data;
+
+      // Update progress bar
+      if (progressData.percentage > 0) {
+        downloadModal.updateProgress(progressData.percentage);
+      }
+
+      // Add log entry
+      downloadModal.addLog(progressData.message, progressData.level);
+
+      // Update time display
+      const startTime = downloadModal.getStartTime();
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const eta = progressData.eta || 0;
+      downloadModal.updateTime(elapsed, eta);
+    }
+  };
+
+  api.addEventListener("pack_progress", progressHandler);
+
+  // Timer for elapsed time update
+  const timeUpdateInterval = setInterval(() => {
+    const startTime = downloadModal.getStartTime();
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    downloadModal.updateTime(elapsed, 0);
+  }, 1000);
+
   try {
-    downloadModal.updateProgress(20);
+    downloadModal.addLog("开始准备工作流数据...", "info");
     const { workflow, output: workflow_api } = await app.graphToPrompt();
 
-    downloadModal.updateProgress(40);
+    downloadModal.addLog("工作流序列化完成", "info");
     const body = JSON.stringify({
       workflow,
       workflow_api,
-      models: result.models,
       files: result.files,
-      system_packages: result.systemPackages
+      system_packages: result.systemPackages,
+      client_id: api.clientId  // Include client_id for WebSocket routing
     });
 
-    downloadModal.updateProgress(60);
-    const resp = await api.fetchApi("/bentoml/pack", { method: "POST", body, headers: { "Content-Type": "application/json" } });
+    downloadModal.addLog("正在发送打包请求...", "info");
+    const resp = await api.fetchApi("/bentoml/pack", {
+      method: "POST",
+      body,
+      headers: { "Content-Type": "application/json" }
+    });
 
-    downloadModal.updateProgress(80);
     const downloadUrl = (await resp.json())["download_url"];
 
-    downloadModal.updateProgress(100);
+    downloadModal.addLog("打包完成！开始下载...", "success");
     const link = document.createElement("a");
     link.href = downloadUrl;
     link.download = result.filename + ".cpack.zip";
     link.click();
 
     setTimeout(() => {
+      clearInterval(timeUpdateInterval);
+      api.removeEventListener("pack_progress", progressHandler);
       downloadModal.close();
-    }, 1000);
+    }, 2000);
   } catch (error) {
     console.error("Package failed:", error);
-    downloadModal.close();
+    downloadModal.addLog(`打包失败: ${error.message}`, "error");
+    clearInterval(timeUpdateInterval);
+    api.removeEventListener("pack_progress", progressHandler);
+    setTimeout(() => {
+      downloadModal.close();
+    }, 3000);
   }
 }
 
@@ -920,7 +1014,7 @@ async function serveAction() {
         close();
         createServeStatusModal(result.url);
       }
-    } catch(e) {
+    } catch (e) {
       const errorDiv = form.querySelector('.error-message');
       errorDiv.textContent = e.message;
       errorDiv.style.display = 'block';
@@ -959,7 +1053,7 @@ class PackageOptions {
     this.filesListId = filesListId;
     this.modelListComponent = null;
     this.fileListComponent = null;
-  this.defaultOpen = defaultOpen;
+    this.defaultOpen = defaultOpen;
   }
 
   getHtml() {
@@ -968,14 +1062,6 @@ class PackageOptions {
         <details ${this.defaultOpen ? 'open' : ''}>
           <summary style="cursor: pointer; margin-bottom: 10px;">Package Options</summary>
           <div style="padding: 10px; background: #1d1d1d; border-radius: 4px;">
-            <div class="cpack-form-item">
-              <details>
-                <summary style="cursor: pointer; margin-bottom: 10px;">Models (<span data-models-count="${this.modelsListId}">0</span> selected)</summary>
-                <div id="${this.modelsListId}">
-                  ${spinner}
-                </div>
-              </details>
-            </div>
             <div class="cpack-form-item">
               <details>
                 <summary style="cursor: pointer; margin-bottom: 10px;">Input Files (<span data-files-count="${this.filesListId}">0</span> selected)</summary>
@@ -999,10 +1085,8 @@ class PackageOptions {
   }
 
   async init() {
-    const modelsList = this.container.querySelector(`#${this.modelsListId}`);
     const filesList = this.container.querySelector(`#${this.filesListId}`);
 
-    this.modelListComponent = new ModelList(modelsList, this.modelsListId);
     this.fileListComponent = new FileTreeList(filesList, this.filesListId);
 
     const addButton = this.container.querySelector("#add-button");
@@ -1023,15 +1107,11 @@ class PackageOptions {
       }
     });
 
-    await Promise.all([
-      this.modelListComponent.load(),
-      this.fileListComponent.load()
-    ]);
+    await this.fileListComponent.load();
   }
 
   getSelectedData() {
     return {
-      models: this.modelListComponent.getSelectedModels(),
       files: this.fileListComponent.getSelectedFiles(),
       systemPackages: Array.from(this.container.querySelectorAll("input[name='systemPackages']"))
         .map(input => input.value)
@@ -1159,7 +1239,6 @@ function createBuildModal() {
         push: true,
         api_key: apiKey,
         endpoint: endpoint,
-        models: selectedData.models,
         files: selectedData.files,
         workflow,
         workflow_api
@@ -1222,7 +1301,7 @@ async function createServeStatusModal(url) {
     cancelButton.style.background = "#666";
     try {
       await api.fetchApi("/bentoml/serve/terminate", { method: "POST" });
-    } catch(e) {
+    } catch (e) {
       console.error("Failed to stop server:", e);
     }
     clearInterval(checkInterval);
@@ -1241,7 +1320,7 @@ async function createServeStatusModal(url) {
         statusInfo.innerHTML = `<div style="color:#ff8383">${status.error}</div>`;
         clearInterval(checkInterval);
       }
-    } catch(e) {
+    } catch (e) {
       title.textContent = "Status Check Error";
       statusInfo.innerHTML = `<div style="color:#ff8383">${e.message}</div>`;
       clearInterval(checkInterval);
@@ -1353,7 +1432,7 @@ async function createBuildingModal(data) {
         </div>
       `;
     }
-  } catch(e) {
+  } catch (e) {
     setError(e.message);
   } finally {
     closeButton.disabled = false;
@@ -1397,49 +1476,49 @@ app.registerExtension({
 
 
     try {
-			// new style Manager buttons
+      // new style Manager buttons
 
-			// unload models button into new style Manager button
-			let cmGroup1 = new (await import("../../scripts/ui/components/buttonGroup.js")).ComfyButtonGroup(
-				new(await import("../../scripts/ui/components/button.js")).ComfyButton({
-					icon: "package-variant-closed",
-					action: packageAction,
-					tooltip: "Comfy-Pack",
-					content: "Package",
-					classList: "comfyui-button comfyui-menu-mobile-collapse primary"
-				}).element,
-      new(await import("../../scripts/ui/components/button.js")).ComfyButton({
-      	icon: "package-variant",
-      	action: unpackAction,
-      	tooltip: "Comfy-Pack",
-      	content: "Unpack",
-      	classList: "comfyui-button comfyui-menu-mobile-collapse"
-      }).element,
+      // unload models button into new style Manager button
+      let cmGroup1 = new (await import("../../scripts/ui/components/buttonGroup.js")).ComfyButtonGroup(
+        new (await import("../../scripts/ui/components/button.js")).ComfyButton({
+          icon: "package-variant-closed",
+          action: packageAction,
+          tooltip: "Comfy-Pack",
+          content: "Package",
+          classList: "comfyui-button comfyui-menu-mobile-collapse primary"
+        }).element,
+        new (await import("../../scripts/ui/components/button.js")).ComfyButton({
+          icon: "package-variant",
+          action: unpackAction,
+          tooltip: "Comfy-Pack",
+          content: "Unpack",
+          classList: "comfyui-button comfyui-menu-mobile-collapse"
+        }).element,
       );
 
-			app.menu?.settingsGroup.element.before(cmGroup1.element);
+      app.menu?.settingsGroup.element.before(cmGroup1.element);
 
-			let cmGroup2 = new (await import("../../scripts/ui/components/buttonGroup.js")).ComfyButtonGroup(
-			  new(await import("../../scripts/ui/components/button.js")).ComfyButton({
-			    icon: "api",
-			    action: serveAction,
-			    tooltip: "Comfy-Pack",
-			    content: "Serve",
-			    classList: "comfyui-button comfyui-menu-mobile-collapse primary"
-			  }).element,
-				new(await import("../../scripts/ui/components/button.js")).ComfyButton({
-					icon: "cloud-upload",
-					action: deployAction,
-					tooltip: "Comfy-Pack",
+      let cmGroup2 = new (await import("../../scripts/ui/components/buttonGroup.js")).ComfyButtonGroup(
+        new (await import("../../scripts/ui/components/button.js")).ComfyButton({
+          icon: "api",
+          action: serveAction,
+          tooltip: "Comfy-Pack",
+          content: "Serve",
+          classList: "comfyui-button comfyui-menu-mobile-collapse primary"
+        }).element,
+        new (await import("../../scripts/ui/components/button.js")).ComfyButton({
+          icon: "cloud-upload",
+          action: deployAction,
+          tooltip: "Comfy-Pack",
           content: "Deploy",
           classList: "comfyui-button comfyui-menu-mobile-collapse"
         }).element,
       );
 
-			app.menu?.settingsGroup.element.before(cmGroup2.element);
-		}
-		catch(exception) {
-			console.log('ComfyUI is outdated. New style menu based features are disabled.');
-		}
+      app.menu?.settingsGroup.element.before(cmGroup2.element);
+    }
+    catch (exception) {
+      console.log('ComfyUI is outdated. New style menu based features are disabled.');
+    }
   }
 });

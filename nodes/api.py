@@ -29,6 +29,50 @@ COMFY_PACK_DIR = Path(__file__).parent.parent / "src" / "comfy_pack"
 EXCLUDE_PACKAGES = ["bentoml", "onnxruntime", "conda", "nvidia-*"]
 
 
+async def send_pack_progress(
+    client_id: str,
+    stage: str,
+    message: str,
+    current: int = 0,
+    total: int = 0,
+    current_file: str = "",
+    cached: bool = False,
+    percentage: int = 0,
+    eta: float = 0.0,
+    level: str = "info",
+) -> None:
+    """
+    Send pack progress update via WebSocket.
+
+    Args:
+        client_id: Client ID for WebSocket routing
+        stage: Current stage identifier (e.g., 'hashing', 'writing_snapshot')
+        message: Human-readable message
+        current: Current progress count
+        total: Total items count
+        current_file: Current file being processed
+        cached: Whether using cache
+        percentage: Progress percentage (0-100)
+        eta: Estimated time remaining in seconds
+        level: Log level ('info', 'success', 'progress', 'cache')
+    """
+    data = {
+        "type": "pack_progress",
+        "data": {
+            "stage": stage,
+            "message": message,
+            "current_file": current_file,
+            "progress": current,
+            "total": total,
+            "cached": cached,
+            "percentage": percentage,
+            "eta": eta,
+            "level": level,
+        },
+    }
+    await PromptServer.instance.send_json("pack_progress", data, client_id)
+
+
 def normalize_name(name: str) -> str:
     import re
 
@@ -120,6 +164,7 @@ async def _get_models(
     model_filter: set[str] | None = None,
     ensure_sha=True,
     ensure_source=True,
+    client_id: str = "",
 ) -> list:
     proc = await asyncio.subprocess.create_subprocess_exec(
         "git",
@@ -147,9 +192,41 @@ async def _get_models(
     else:
         to_include = model_filenames
 
+    # Send model count info
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="hashing",
+            message=f"找到 {len(to_include)} 个模型文件，开始计算哈希...",
+            total=len(to_include),
+            percentage=15,
+            level="info",
+        )
+
+    # Define progress callback for hash calculation
+    async def hash_progress_callback(current, total, filepath, cached, eta):
+        if client_id:
+            filename = os.path.basename(filepath)
+            percentage = 15 + int((current / total) * 65)  # 15% -> 80%
+            level = "cache" if cached else "progress"
+            cache_msg = " (缓存)" if cached else ""
+            await send_pack_progress(
+                client_id,
+                stage="hashing",
+                message=f"计算哈希 ({current}/{total}){cache_msg}",
+                current=current,
+                total=total,
+                current_file=filename,
+                cached=cached,
+                percentage=percentage,
+                eta=eta,
+                level=level,
+            )
+
     model_hashes = await async_batch_get_sha256(
         to_include,
         cache_only=not (ensure_sha or store_models),
+        progress_callback=hash_progress_callback,
     )
 
     for filename in to_include:
@@ -236,6 +313,18 @@ async def _write_inputs(path: ZPath, data: dict) -> None:
 @PromptServer.instance.routes.post("/bentoml/pack")
 async def pack_workspace(request):
     data = await request.json()
+    client_id = data.get("client_id", "")
+
+    # Send initial progress
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="preparing",
+            message="开始准备打包...",
+            percentage=5,
+            level="info",
+        )
+
     TEMP_FOLDER.mkdir(exist_ok=True)
     older_than_1h = time.time() - 60 * 60
     for file in TEMP_FOLDER.iterdir():
@@ -246,7 +335,17 @@ async def pack_workspace(request):
 
     with zipfile.ZipFile(TEMP_FOLDER / zip_filename, "w") as zf:
         path = zipfile.Path(zf)
-        await _prepare_pack(path, data)
+        await _prepare_pack(path, data, client_id=client_id)
+
+    # Send completion progress
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="completed",
+            message="打包完成！",
+            percentage=100,
+            level="success",
+        )
 
     return web.json_response({"download_url": f"/bentoml/download/{zip_filename}"})
 
@@ -449,16 +548,39 @@ async def _prepare_pack(
     data: dict,
     store_models: bool = False,
     ensure_source: bool = True,
+    client_id: str = "",
 ) -> None:
-    model_filter = set(data.get("models", []))
-    models = await _get_models(
-        store_models=store_models,
-        model_filter=model_filter,
-        ensure_source=ensure_source,
-    )
+    # Write snapshot
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="writing_snapshot",
+            message="正在写入快照文件...",
+            percentage=70,
+            level="info",
+        )
+    await _write_snapshot(working_dir, data, models=[])
 
-    await _write_snapshot(working_dir, data, models)
+    # Write workflow
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="writing_workflow",
+            message="正在写入工作流文件...",
+            percentage=80,
+            level="info",
+        )
     await _write_workflow(working_dir, data)
+
+    # Write inputs
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="writing_inputs",
+            message="正在复制输入文件...",
+            percentage=90,
+            level="info",
+        )
     await _write_inputs(working_dir, data)
 
 

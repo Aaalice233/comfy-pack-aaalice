@@ -3,10 +3,11 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 
 from .const import SHA_CACHE_FILE
 
@@ -52,7 +53,17 @@ def batch_get_sha256(filepaths: List[str], cache_only: bool = False) -> Dict[str
 async def async_batch_get_sha256(
     filepaths: List[str],
     cache_only: bool = False,
+    progress_callback: Optional[Callable] = None,
 ) -> Dict[str, str]:
+    """
+    Calculate SHA256 hashes for multiple files with progress tracking.
+
+    Args:
+        filepaths: List of file paths to hash
+        cache_only: If True, only return cached hashes
+        progress_callback: Optional callback function for progress updates
+                          Called with (current, total, filepath, cached, eta)
+    """
     # Load cache
     cache = {}
     if SHA_CACHE_FILE.exists():
@@ -68,46 +79,70 @@ async def async_batch_get_sha256(
     # Process files
     results = {}
     new_cache = {}
-    async with asyncio.Lock():
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            loop = asyncio.get_event_loop()
+    start_time = time.time()
+    total_files = len(filepaths)
 
-            for filepath in filepaths:
-                if not os.path.exists(filepath):
-                    results[filepath] = None
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        loop = asyncio.get_event_loop()
+
+        for idx, filepath in enumerate(filepaths):
+            current = idx + 1
+
+            if not os.path.exists(filepath):
+                results[filepath] = None
+                continue
+
+            # Get file info
+            stat = os.stat(filepath)
+            current_size = stat.st_size
+            current_time = stat.st_ctime
+
+            # Check cache
+            cache_entry = cache.get(filepath)
+            cached = False
+            if cache_entry:
+                if (
+                    cache_entry["size"] == current_size
+                    and cache_entry["birthtime"] == current_time
+                ):
+                    results[filepath] = cache_entry["sha256"]
+                    cached = True
+
+                    # Calculate ETA
+                    elapsed = time.time() - start_time
+                    avg_time_per_file = elapsed / current if current > 0 else 0
+                    eta = avg_time_per_file * (total_files - current)
+
+                    # Report progress for cached file
+                    if progress_callback:
+                        await progress_callback(current, total_files, filepath, True, eta)
                     continue
 
-                # Get file info
-                stat = os.stat(filepath)
-                current_size = stat.st_size
-                current_time = stat.st_ctime
+            if cache_only:
+                results[filepath] = ""
+                continue
 
-                # Check cache
-                cache_entry = cache.get(filepath)
-                if cache_entry:
-                    if (
-                        cache_entry["size"] == current_size
-                        and cache_entry["birthtime"] == current_time
-                    ):
-                        results[filepath] = cache_entry["sha256"]
-                        continue
+            # Calculate new SHA
+            calc_func = partial(calculate_sha256_worker, filepath)
+            sha256 = await loop.run_in_executor(pool, calc_func)
 
-                if cache_only:
-                    results[filepath] = ""
-                    continue
+            # Update cache and results
+            new_cache[filepath] = {
+                "sha256": sha256,
+                "size": current_size,
+                "birthtime": current_time,
+                "last_verified": datetime.now().isoformat(),
+            }
+            results[filepath] = sha256
 
-                # Calculate new SHA
-                calc_func = partial(calculate_sha256_worker, filepath)
-                sha256 = await loop.run_in_executor(pool, calc_func)
+            # Calculate ETA
+            elapsed = time.time() - start_time
+            avg_time_per_file = elapsed / current if current > 0 else 0
+            eta = avg_time_per_file * (total_files - current)
 
-                # Update cache and results
-                new_cache[filepath] = {
-                    "sha256": sha256,
-                    "size": current_size,
-                    "birthtime": current_time,
-                    "last_verified": datetime.now().isoformat(),
-                }
-                results[filepath] = sha256
+            # Report progress for newly calculated hash
+            if progress_callback:
+                await progress_callback(current, total_files, filepath, False, eta)
 
     # Save cache
     try:
