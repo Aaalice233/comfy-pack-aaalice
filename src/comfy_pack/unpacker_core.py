@@ -210,8 +210,11 @@ def get_installed_packages(python_exe: Path) -> Dict[str, str]:
     return {}
 
 
-def get_installed_plugins(comfyui_dir: Path, git_exe: Optional[Path] = None) -> Dict[str, str]:
-    """获取已安装的插件和当前 commit"""
+def get_installed_plugins(comfyui_dir: Path, git_exe: Optional[Path] = None) -> Dict[str, dict]:
+    """
+    获取已安装的插件和当前 commit
+    返回: {插件名: {'commit': 'xxx', 'url': 'xxx', 'path': Path}}
+    """
     custom_nodes = comfyui_dir / "custom_nodes"
     if not custom_nodes.exists():
         return {}
@@ -228,6 +231,7 @@ def get_installed_plugins(comfyui_dir: Path, git_exe: Optional[Path] = None) -> 
             continue
         
         try:
+            # 获取当前 commit
             result = subprocess.run(
                 [git_cmd, "rev-parse", "HEAD"],
                 cwd=item,
@@ -235,9 +239,32 @@ def get_installed_plugins(comfyui_dir: Path, git_exe: Optional[Path] = None) -> 
                 text=True,
                 timeout=5
             )
-            if result.returncode == 0:
-                commit = result.stdout.strip()
-                plugins[item.name] = commit
+            if result.returncode != 0:
+                continue
+            
+            commit = result.stdout.strip()
+            
+            # 获取 remote URL
+            url_result = subprocess.run(
+                [git_cmd, "remote", "get-url", "origin"],
+                cwd=item,
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            
+            url = url_result.stdout.strip() if url_result.returncode == 0 else ""
+            
+            # 标准化 URL（移除 .git 后缀，统一 https/git 格式）
+            if url:
+                url = url.rstrip('/').rstrip('.git')
+                url = url.replace('git@github.com:', 'https://github.com/')
+            
+            plugins[item.name] = {
+                'commit': commit,
+                'url': url,
+                'path': item
+            }
         except Exception:
             continue
     
@@ -398,30 +425,118 @@ def check_plugin_versions(
         'ok': []
     }
     
+    # 标准化 URL 的辅助函数
+    def normalize_url(url: str) -> str:
+        """标准化 Git URL 用于比较"""
+        url = url.strip().rstrip('/').rstrip('.git')
+        url = url.replace('git@github.com:', 'https://github.com/')
+        return url.lower()
+    
+    # 建立 URL 到已安装插件的映射，同时检测重复插件
+    url_to_installed = {}
+    duplicates_to_remove = []  # 需要删除的重复插件
+    
+    for name, info in installed.items():
+        if info['url']:
+            normalized = normalize_url(info['url'])
+            
+            # 检测是否已存在相同 URL 的插件
+            if normalized in url_to_installed:
+                # 发现重复插件！保留其中一个，删除另一个
+                existing = url_to_installed[normalized]
+                
+                # 决策：保留目录名较短的（通常是官方推荐的名称）
+                if len(name) < len(existing['name']):
+                    # 当前插件名更短，保留当前，删除已存在的
+                    duplicates_to_remove.append(existing['path'])
+                    url_to_installed[normalized] = {
+                        'name': name,
+                        'commit': info['commit'],
+                        'path': info['path']
+                    }
+                    if log_callback:
+                        log_callback(f"检测到重复插件: {existing['name']} 和 {name}，将删除 {existing['name']}")
+                else:
+                    # 已存在的名称更短或相同，删除当前
+                    duplicates_to_remove.append(info['path'])
+                    if log_callback:
+                        log_callback(f"检测到重复插件: {existing['name']} 和 {name}，将删除 {name}")
+            else:
+                url_to_installed[normalized] = {
+                    'name': name,
+                    'commit': info['commit'],
+                    'path': info['path']
+                }
+    
+    # 删除重复的插件
+    if duplicates_to_remove:
+        if log_callback:
+            log_callback(f"\n开始清理 {len(duplicates_to_remove)} 个重复插件...")
+        
+        for plugin_path in duplicates_to_remove:
+            try:
+                if log_callback:
+                    log_callback(f"  删除: {plugin_path.name}")
+                
+                # 使用健壮的删除方法
+                if plugin_path.exists():
+                    def remove_readonly(func, path, _):
+                        """清除只读位并重试"""
+                        import stat
+                        os.chmod(path, stat.S_IWRITE)
+                        func(path)
+                    
+                    shutil.rmtree(plugin_path, onerror=remove_readonly)
+                    
+                    if log_callback:
+                        log_callback(f"  ✓ 已删除重复插件: {plugin_path.name}")
+            except Exception as e:
+                if log_callback:
+                    log_callback(f"  ✗ 删除失败 {plugin_path.name}: {e}")
+        
+        if log_callback:
+            log_callback("")
+    
     for plugin in required:
         url = plugin.get("url", "").strip()
         if not url:
             continue
         
+        # 标准化快照中的 URL
+        normalized_url = normalize_url(url)
         plugin_name = url.split("/")[-1].replace(".git", "")
+        
+        # 跳过解包器本身，避免自我更新导致的问题
+        if plugin_name.lower() in ['comfy-pack-aaalice', 'comfy-pack']:
+            if log_callback:
+                log_callback(f"  ⊙ 跳过解包器本身: {plugin_name}")
+            continue
+        
         target_commit = plugin.get("commit_hash", "").strip()
         
-        if plugin_name not in installed:
+        # 通过 URL 查找是否已安装（而不是通过插件名）
+        if normalized_url in url_to_installed:
+            existing = url_to_installed[normalized_url]
+            actual_name = existing['name']
+            current_commit = existing['commit']
+            
+            if current_commit[:8] != target_commit[:8]:
+                result['to_update'].append({
+                    'name': actual_name,  # 使用实际的目录名
+                    'url': url,
+                    'current': current_commit[:8],
+                    'target': target_commit[:8],
+                    'target_full': target_commit
+                })
+            else:
+                result['ok'].append(actual_name)
+        else:
+            # 未安装
             result['to_install'].append({
                 'name': plugin_name,
                 'url': url,
                 'commit': target_commit
             })
-        elif installed[plugin_name] != target_commit:
-            result['to_update'].append({
-                'name': plugin_name,
-                'url': url,
-                'current': installed[plugin_name][:8],
-                'target': target_commit[:8],
-                'target_full': target_commit
-            })
-        else:
-            result['ok'].append(plugin_name)
     
     if log_callback:
         log_callback(f"需要安装: {len(result['to_install'])} 个插件")
@@ -1282,8 +1397,8 @@ def copy_workflow_files(
             log_callback("✗ 压缩包中没有 workflow.json")
         return False
     
-    # 目标目录：ComfyUI/user/default
-    target_dir = comfyui_dir / "user" / "default"
+    # 目标目录：ComfyUI/user/default/workflows
+    target_dir = comfyui_dir / "user" / "default" / "workflows"
     target_dir.mkdir(parents=True, exist_ok=True)
     
     # 从压缩包文件名获取工作流名称
@@ -1296,10 +1411,17 @@ def copy_workflow_files(
     target_filename = f"{workflow_name}.json"
     target = target_dir / target_filename
     
+    # 检查是否会覆盖已存在的文件
+    if target.exists():
+        if log_callback:
+            log_callback(f"⚠ 工作流文件已存在，将覆盖: user/default/workflows/{target_filename}")
+    
     try:
+        # 只复制单个工作流文件，不会删除或影响目录中的其他文件
         shutil.copy2(source, target)
         if log_callback:
-            log_callback(f"复制工作流文件到: user/default/{target_filename}")
+            log_callback(f"✓ 工作流文件已保存到: user/default/workflows/{target_filename}")
+            log_callback(f"  （其他工作流文件保持不变）")
         return True
     except Exception as e:
         if log_callback:
