@@ -284,6 +284,15 @@ async def _write_workflow(path: ZPath, data: dict) -> None:
         f.write(json.dumps(data["workflow"], indent=2))
 
 
+async def _write_completion_message(path: ZPath, data: dict) -> None:
+    """写入自定义完成消息"""
+    completion_message = data.get("completion_message", "").strip()
+    if completion_message:
+        print("Package => Writing completion message")
+        with path.joinpath("completion_message.txt").open("w", encoding="utf-8") as f:
+            f.write(completion_message)
+
+
 async def _write_inputs(path: ZPath, data: dict) -> None:
     print("Package => Writing inputs")
     if isinstance(path, Path):
@@ -579,6 +588,9 @@ async def _prepare_pack(
             level="info",
         )
     await _write_workflow(working_dir, data)
+    
+    # Write completion message (if provided)
+    await _write_completion_message(working_dir, data)
 
     # Write inputs
     if client_id:

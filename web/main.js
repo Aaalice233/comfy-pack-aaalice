@@ -653,6 +653,11 @@ async function createPackModal() {
         <label for="filename">Name</label>
         <input type="text" class="cpack-input" name="filename" value="${localStorage.getItem('cpack-bento-name') || 'comfy-pack-pkg'}" />
       </div>
+      <div class="cpack-form-item">
+        <label for="completion_message">Completion Message (optional)</label>
+        <textarea class="cpack-input" name="completion_message" rows="3" placeholder="例如：欢迎加入Aaalice的服务器！ https://discord.gg/R48n6GwXzD">${localStorage.getItem('cpack-completion-message') || ''}</textarea>
+        <small style="color: #888; font-size: 12px;">解包完成后显示的自定义消息，支持链接</small>
+      </div>
       <div id="package-options-container"></div>
     `;
 
@@ -686,15 +691,17 @@ async function createPackModal() {
 
     confirmButton.onclick = () => {
       const filename = form.querySelector("input[name='filename']").value.trim();
+      const completionMessage = form.querySelector("textarea[name='completion_message']").value.trim();
       if (filename) {
-        // Save filename to localStorage
+        // Save to localStorage
         localStorage.setItem('cpack-bento-name', filename);
+        localStorage.setItem('cpack-completion-message', completionMessage);
         const selectedData = packageOptions.getSelectedData();
         close();
         resolve({
           filename,
-          files: selectedData.files,
-          systemPackages: selectedData.systemPackages
+          completionMessage,
+          files: selectedData.files
         });
       }
     };
@@ -863,8 +870,8 @@ async function packageAction() {
       workflow,
       workflow_api,
       files: result.files,
-      system_packages: result.systemPackages,
       filename: result.filename,  // Include filename for custom naming
+      completion_message: result.completionMessage,  // Include completion message
       client_id: api.clientId  // Include client_id for WebSocket routing
     });
 
@@ -1018,14 +1025,6 @@ class PackageOptions {
                 </div>
               </details>
             </div>
-            <div class="cpack-form-item">
-              <details>
-                <summary style="cursor: pointer; margin-bottom: 10px;">System Packages</summary>
-                <div id="system-packages-array" style="padding: 10px;">
-                  <button class="cpack-btn" id="add-button" style="margin: 5px 0px">Add Package</button>
-                </div>
-              </details>
-            </div>
           </div>
         </details>
       </div>
@@ -1037,33 +1036,12 @@ class PackageOptions {
 
     this.fileListComponent = new FileTreeList(filesList, this.filesListId);
 
-    const addButton = this.container.querySelector("#add-button");
-    const systemPackagesArray = this.container.querySelector("#system-packages-array");
-
-    addButton.addEventListener("click", (e) => {
-      e.preventDefault();
-      const row = document.createElement("div");
-      row.className = "cpack-input-row";
-      row.innerHTML = `
-        <div style="flex: 1"><input type="text" class="cpack-input" name="systemPackages" placeholder="package name in Ubuntu" /></div>
-        <button class="cpack-btn" style="margin-left: 10px">Remove</button>
-      `
-      systemPackagesArray.appendChild(row);
-      row.querySelector("button").onclick = (e) => {
-        e.preventDefault();
-        row.remove();
-      }
-    });
-
     await this.fileListComponent.load();
   }
 
   getSelectedData() {
     return {
-      files: this.fileListComponent.getSelectedFiles(),
-      systemPackages: Array.from(this.container.querySelectorAll("input[name='systemPackages']"))
-        .map(input => input.value)
-        .filter(Boolean)
+      files: this.fileListComponent.getSelectedFiles()
     };
   }
 }
