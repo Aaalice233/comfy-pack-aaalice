@@ -32,6 +32,9 @@ MANIFEST
 *.manifest
 *.spec
 
+# Exception: Keep unpacker.spec for EXE building
+!exe/unpacker.spec
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
@@ -166,3 +169,5 @@ src/.DS_Store
 
 # Claude Code
 .spec-workflow/
+.serena/
+.claude/

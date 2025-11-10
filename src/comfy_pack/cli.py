@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 
 from .const import COMFY_PACK_REPO, COMFYUI_MANAGER_REPO, COMFYUI_REPO, WORKSPACE_DIR
-from .hash import get_sha256
+# from .hash import get_sha256  # 哈希功能已移除
 from .utils import get_self_git_commit
 
 

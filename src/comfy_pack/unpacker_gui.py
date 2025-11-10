@@ -319,9 +319,15 @@ class MainWindow(QMainWindow):
         
         # 设置窗口图标
         icon_path = self.get_icon_path()
+
         if icon_path and icon_path.exists():
-            from PySide6.QtGui import QIcon
-            self.setWindowIcon(QIcon(str(icon_path)))
+            try:
+                from PySide6.QtGui import QIcon
+                icon = QIcon(str(icon_path))
+                if not icon.isNull():
+                    self.setWindowIcon(icon)
+            except Exception as e:
+                pass  # 静默处理图标设置失败
         
         self.cpack_path: Optional[Path] = None
         self.comfyui_dir: Optional[Path] = None
@@ -339,12 +345,15 @@ class MainWindow(QMainWindow):
             Path(__file__).parent.parent.parent / "icon.ico",  # 插件根目录
             Path(__file__).parent / "icon.ico",  # comfy_pack 目录
             Path("icon.ico"),  # 当前目录
+            # 打包后的可能路径
+            Path("_internal/icon.ico"),  # PyInstaller内部目录
+            Path("../icon.ico"),  # 上级目录
         ]
         
         for path in possible_paths:
             if path.exists():
                 return path
-        
+
         return None
     
     def load_previous_config(self):

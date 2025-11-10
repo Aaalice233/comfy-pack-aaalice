@@ -4,14 +4,11 @@ import asyncio
 import json
 import os
 import shutil
-import socket
-import subprocess
 import sys
 import tempfile
 import time
 import uuid
 import zipfile
-from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Union
 
@@ -19,14 +16,9 @@ import folder_paths
 from aiohttp import web
 from server import PromptServer
 
-from comfy_pack.hash import async_batch_get_sha256
-from comfy_pack.model_helper import alookup_model_source
-from comfy_pack.package import build_bento
-
 ZPath = Union[Path, zipfile.Path]
 TEMP_FOLDER = Path(__file__).parent.parent / "temp"
 COMFY_PACK_DIR = Path(__file__).parent.parent / "src" / "comfy_pack"
-EXCLUDE_PACKAGES = ["bentoml", "onnxruntime", "conda", "nvidia-*"]
 
 
 async def send_pack_progress(
@@ -36,7 +28,6 @@ async def send_pack_progress(
     current: int = 0,
     total: int = 0,
     current_file: str = "",
-    cached: bool = False,
     percentage: int = 0,
     eta: float = 0.0,
     level: str = "info",
@@ -46,12 +37,11 @@ async def send_pack_progress(
 
     Args:
         client_id: Client ID for WebSocket routing
-        stage: Current stage identifier (e.g., 'hashing', 'writing_snapshot')
+        stage: Current stage identifier
         message: Human-readable message
         current: Current progress count
         total: Total items count
         current_file: Current file being processed
-        cached: Whether using cache
         percentage: Progress percentage (0-100)
         eta: Estimated time remaining in seconds
         level: Log level ('info', 'success', 'progress', 'cache')
@@ -64,19 +54,12 @@ async def send_pack_progress(
             "current_file": current_file,
             "progress": current,
             "total": total,
-            "cached": cached,
             "percentage": percentage,
             "eta": eta,
             "level": level,
         },
     }
     await PromptServer.instance.send_json("pack_progress", data, client_id)
-
-
-def normalize_name(name: str) -> str:
-    import re
-
-    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def get_snapshot_path() -> Path | None:
@@ -111,169 +94,16 @@ async def _save_snapshot() -> dict[str, Any]:
         return json.load(f)
 
 
-async def _write_snapshot(path: ZPath, data: dict, models: list) -> None:
+async def _write_snapshot(path: ZPath, data: dict) -> None:
     snapshot = await _save_snapshot()
-    for package in list(snapshot["pips"]):
-        if any(
-            fnmatch(normalize_name(package.split("==")[0]), pat)
-            for pat in EXCLUDE_PACKAGES
-        ):
-            del snapshot["pips"][package]
     with path.joinpath("snapshot.json").open("w") as f:
         snapshot.update(
             {
                 "python": f"{sys.version_info.major}.{sys.version_info.minor}",
-                "models": models,
+                "models": [],  # 简化版不收集模型信息
             }
         )
         f.write(json.dumps(snapshot, indent=2))
-
-
-def _is_port_in_use(port: int | str, host="localhost"):
-    if isinstance(port, str):
-        port = int(port)
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.connect((host, port))
-            return True
-        except ConnectionRefusedError:
-            return False
-        except Exception:
-            return True
-
-
-def _is_file_refered(file_path: Path, workflow_api: dict) -> bool:
-    """ """
-    used_inputs = set()
-    for node in workflow_api.values():
-        for _, v in node["inputs"].items():
-            if isinstance(v, str):
-                used_inputs.add(v)
-    all_inputs = "\n".join(used_inputs)
-    file_path = file_path.absolute().relative_to(folder_paths.base_path)
-    if file_path.parts[0] == "input":
-        relpath = Path(*file_path.parts[1:])
-    else:  # models
-        relpath = Path(*file_path.parts[2:])
-    return str(relpath) in all_inputs
-
-
-async def _get_models(
-    store_models: bool = False,
-    workflow_api: dict | None = None,
-    model_filter: set[str] | None = None,
-    ensure_sha=True,
-    ensure_source=True,
-    client_id: str = "",
-) -> list:
-    proc = await asyncio.subprocess.create_subprocess_exec(
-        "git",
-        "ls-files",
-        "--others",
-        folder_paths.models_dir,
-        stdout=subprocess.PIPE,
-    )
-    stdout, _ = await proc.communicate()
-
-    models = []
-    model_filenames = [
-        os.path.abspath(line.strip().strip('"').replace('\\', '/'))
-        for line in stdout.decode().splitlines()
-        if not os.path.basename(line.strip().strip('"').replace('\\', '/')).startswith(".")
-    ]
-
-    # Only compute hashes for referenced models
-    to_include = []
-    if model_filter:
-        for m1 in model_filter:
-            for m2 in model_filenames:
-                if m1 in m2:
-                    to_include.append(m2)
-    else:
-        to_include = model_filenames
-
-    # Send model count info
-    if client_id:
-        await send_pack_progress(
-            client_id,
-            stage="hashing",
-            message=f"找到 {len(to_include)} 个模型文件，开始计算哈希...",
-            total=len(to_include),
-            percentage=15,
-            level="info",
-        )
-
-    # Define progress callback for hash calculation
-    async def hash_progress_callback(current, total, filepath, cached, eta):
-        if client_id:
-            filename = os.path.basename(filepath)
-            percentage = 15 + int((current / total) * 65)  # 15% -> 80%
-            level = "cache" if cached else "progress"
-            cache_msg = " (缓存)" if cached else ""
-            await send_pack_progress(
-                client_id,
-                stage="hashing",
-                message=f"计算哈希 ({current}/{total}){cache_msg}",
-                current=current,
-                total=total,
-                current_file=filename,
-                cached=cached,
-                percentage=percentage,
-                eta=eta,
-                level=level,
-            )
-
-    model_hashes = await async_batch_get_sha256(
-        to_include,
-        cache_only=not (ensure_sha or store_models),
-        progress_callback=hash_progress_callback,
-    )
-
-    for filename in to_include:
-        # Skip if file doesn't exist
-        if not os.path.exists(filename):
-            continue
-            
-        relpath = os.path.relpath(filename, folder_paths.base_path)
-
-        model_data = {
-            "filename": relpath,
-            "size": os.path.getsize(filename),
-            "atime": os.path.getatime(filename),
-            "ctime": os.path.getctime(filename),
-            "disabled": relpath not in model_filter
-            if model_filter is not None
-            else False,
-            "sha256": model_hashes.get(filename),
-        }
-
-        model_data["source"] = await alookup_model_source(
-            model_data["sha256"],
-            cache_only=not ensure_source,
-        )
-        # should_store = store_models and (
-        #     model_data["source"].get("source") != "huggingface"
-        #     or model_data["source"].get("repo", "").startswith("datasets/")
-        # )  # TODO: sort this out
-        should_store = store_models
-
-        if should_store:
-            import bentoml
-
-            model_tag = f"cpack-model:{model_data['sha256'][:16]}"
-            try:
-                model = bentoml.models.get(model_tag)
-            except bentoml.exceptions.NotFound:
-                with bentoml.models.create(
-                    model_tag, labels={"filename": relpath}
-                ) as model:
-                    shutil.copy(filename, model.path_of("model.bin"))
-            model_data["model_tag"] = model_tag
-        models.append(model_data)
-    if workflow_api:
-        for model in models:
-            model["refered"] = _is_file_refered(Path(model["filename"]), workflow_api)
-    return models
 
 
 async def _write_workflow(path: ZPath, data: dict) -> None:
@@ -294,22 +124,19 @@ async def _write_completion_message(path: ZPath, data: dict) -> None:
 
 
 async def _write_inputs(path: ZPath, data: dict) -> None:
-    print("Package => Writing inputs")
+    print("Package => Writing inputs (自动处理所有文件)")
     if isinstance(path, Path):
         path.joinpath("input").mkdir(exist_ok=True)
 
     input_dir = folder_paths.get_input_directory()
 
-    if "files" in data:
-        selected = "\n".join(set(data.get("files", [])))
-    else:
-        selected = None
+    # 简化版：自动包含所有输入文件，无需用户选择
+    selected = None  # 不再过滤文件，包含所有文件
 
     src_root = Path(input_dir).absolute()
     for src in src_root.glob("**/*"):
         rel = src.relative_to(src_root)
-        if selected is not None and str(rel) not in selected:
-            continue
+        # 简化版：不再检查文件选择，直接包含所有文件
         if src.is_dir():
             if isinstance(path, Path):
                 path.joinpath("input").joinpath(rel).mkdir(parents=True, exist_ok=True)
@@ -367,193 +194,6 @@ async def pack_workspace(request):
     return web.json_response({"download_url": f"/bentoml/download/{zip_filename}"})
 
 
-class DevServer:
-    TIMEOUT = 3600 * 24
-    proc: Union[None, subprocess.Popen] = None
-    watch_dog_task: asyncio.Task | None = None
-    last_feed = 0
-    run_dir: Path | None = None
-    port = 0
-
-    @classmethod
-    def start(cls, workflow_api: dict, port: int = 3000):
-        from comfy_pack import __file__ as comfy_pack_file
-
-        cls.stop()
-
-        cls.port = port
-        # prepare a temporary directory
-        cls.run_dir = Path(tempfile.mkdtemp(suffix="-bento", prefix="comfy-pack-"))
-        with cls.run_dir.joinpath("workflow_api.json").open("w") as f:
-            f.write(json.dumps(workflow_api, indent=2))
-        shutil.copy(
-            Path(comfy_pack_file).with_name("service.py"),
-            cls.run_dir / "service.py",
-        )
-        shutil.copytree(COMFY_PACK_DIR, cls.run_dir / COMFY_PACK_DIR.name)
-
-        # find a free port
-        self_port = 8188
-        for i, arg in enumerate(sys.argv):
-            if arg == "--port" or arg == "-p":
-                self_port = int(sys.argv[i + 1])
-                break
-
-        print(f"Starting dev server at port {port}, comfyui at port {self_port}")
-        cls.proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "bentoml",
-                "serve",
-                "service:ComfyService",
-                "--port",
-                str(port),
-            ],
-            cwd=str(cls.run_dir.absolute()),
-            env={
-                **os.environ,
-                "COMFYUI_SERVER": f"localhost:{self_port}",
-            },
-        )
-        cls.watch_dog_task = asyncio.create_task(cls.watch_dog())
-        cls.last_feed = time.time()
-
-    @classmethod
-    async def watch_dog(cls):
-        while True:
-            await asyncio.sleep(0.1)
-            if cls.last_feed + cls.TIMEOUT < time.time():
-                cls.stop()
-                break
-
-    @classmethod
-    def feed_watch_dog(cls):
-        if cls.proc:
-            if cls.proc.poll() is None:
-                cls.last_feed = time.time()
-                return True
-            else:
-                cls.stop()
-                return False
-        return False
-
-    @classmethod
-    def stop(cls):
-        if cls.proc:
-            cls.proc.terminate()
-            cls.proc.wait()
-            cls.proc = None
-            time.sleep(1)
-            print("Dev server stopped")
-        if cls.watch_dog_task:
-            cls.watch_dog_task.cancel()
-            cls.watch_dog_task = None
-            cls.last_feed = 0
-        if cls.run_dir:
-            shutil.rmtree(cls.run_dir)
-            cls.run_dir = None
-
-
-def _parse_workflow(workflow: dict) -> tuple[dict[str, Any], dict[str, Any]]:
-    inputs = {}
-    outputs = {}
-    dep_map = {}
-
-    for id, node in workflow.items():
-        for input_name, v in node["inputs"].items():
-            if isinstance(v, list) and len(v) == 2:  # is a link
-                dep_map[tuple(v)] = node, input_name
-
-    for id, node in workflow.items():
-        node["id"] = id
-        if node["class_type"].startswith("CPackInput"):
-            if not node.get("inputs"):
-                continue
-            inputs[id] = node
-        elif node["class_type"].startswith("CPackOutput"):
-            if not node.get("inputs"):
-                continue
-            outputs[id] = node
-
-    return inputs, outputs
-
-
-def _validate_workflow(data: dict):
-    workflow = data.get("workflow_api", {})
-    if not workflow:
-        return web.json_response(
-            {
-                "result": "error",
-                "error": "empty workflow",
-            },
-        )
-    input_spec, output_spec = _parse_workflow(workflow)
-    if not input_spec:
-        return web.json_response(
-            {
-                "result": "error",
-                "error": "At least one ComfyPack input node is required",
-            },
-        )
-    if not output_spec:
-        return web.json_response(
-            {
-                "result": "error",
-                "error": "At least one ComfyPack output node is required",
-            },
-        )
-
-
-@PromptServer.instance.routes.post("/bentoml/serve")
-async def serve(request):
-    data = await request.json()
-
-    if (error := _validate_workflow(data)) is not None:
-        return error
-
-    DevServer.stop()
-
-    if _is_port_in_use(data.get("port", 3000), host=data.get("host", "localhost")):
-        return web.json_response(
-            {
-                "result": "error",
-                "error": "Port is already in use",
-            },
-        )
-    try:
-        DevServer.start(workflow_api=data["workflow_api"], port=data.get("port", 3000))
-        return web.json_response(
-            {
-                "result": "success",
-                "url": f"http://{data.get('host', 'localhost')}:{data.get('port', 3000)}",
-            },
-        )
-    except Exception as e:
-        return web.json_response(
-            {
-                "result": "error",
-                "error": f"Build failed: {e.__class__.__name__}: {e}",
-            },
-        )
-
-
-@PromptServer.instance.routes.get("/bentoml/serve/heartbeat")
-async def heartbeat(_):
-    running = DevServer.feed_watch_dog()
-
-    if running:
-        return web.json_response({"ready": True})
-    else:
-        return web.json_response({"error": "Server is not running"})
-
-
-@PromptServer.instance.routes.post("/bentoml/serve/terminate")
-async def terminate(_):
-    DevServer.stop()
-    return web.json_response({"result": "success"})
-
-
 @PromptServer.instance.routes.get("/bentoml/download/{zip_filename}")
 async def download_workspace(request):
     zip_filename = request.match_info["zip_filename"]
@@ -573,10 +213,10 @@ async def _prepare_pack(
             client_id,
             stage="writing_snapshot",
             message="正在写入快照文件...",
-            percentage=70,
+            percentage=40,
             level="info",
         )
-    await _write_snapshot(working_dir, data, models=[])
+    await _write_snapshot(working_dir, data)
 
     # Write workflow
     if client_id:
@@ -584,11 +224,11 @@ async def _prepare_pack(
             client_id,
             stage="writing_workflow",
             message="正在写入工作流文件...",
-            percentage=80,
+            percentage=60,
             level="info",
         )
     await _write_workflow(working_dir, data)
-    
+
     # Write completion message (if provided)
     await _write_completion_message(working_dir, data)
 
@@ -598,104 +238,17 @@ async def _prepare_pack(
             client_id,
             stage="writing_inputs",
             message="正在复制输入文件...",
-            percentage=90,
+            percentage=80,
             level="info",
         )
     await _write_inputs(working_dir, data)
 
-
-@PromptServer.instance.routes.post("/bentoml/model/query")
-async def get_models(request):
-    data = await request.json()
-    models = await _get_models(
-        workflow_api=data.get("workflow_api"),
-        ensure_sha=False,
-        ensure_source=False,
-    )
-    return web.json_response({"models": models})
-
-
-async def _get_inputs(workflow_api):
-    input_dir = folder_paths.get_input_directory()
-    inputs = []
-    for src in Path(input_dir).rglob("*"):
-        if src.is_file():
-            rel = src.relative_to(input_dir)
-            badges = []
-            checked = False
-            if _is_file_refered(src, workflow_api):
-                badges.append({"text": "Referenced"})
-                checked = True
-            data = {
-                "path": str(rel),
-                "badges": badges,
-                "checked": checked,
-            }
-            inputs.append(data)
-    return inputs
-
-
-@PromptServer.instance.routes.post("/bentoml/file/query")
-async def get_inputs(request):
-    data = await request.json()
-    inputs = await _get_inputs(
-        workflow_api=data.get("workflow_api"),
-    )
-    return web.json_response({"files": inputs})
-
-
-@PromptServer.instance.routes.post("/bentoml/build")
-async def build_bento_api(request):
-    """Request body: {
-        workflow_api: dict,
-        workflow: dict,
-        bento_name: str,
-        push?: bool,
-        api_key?: str,
-        endpoint?: str,
-        system_packages?: list[str]
-    }"""
-    import bentoml
-
-    data = await request.json()
-
-    if (error := _validate_workflow(data)) is not None:
-        return error
-
-    with tempfile.TemporaryDirectory(suffix="-bento", prefix="comfy-pack-") as temp_dir:
-        temp_dir_path = Path(temp_dir)
-        await _prepare_pack(temp_dir_path, data, store_models=True, ensure_source=False)
-
-        # create a bento
-        try:
-            bento = build_bento(
-                data["bento_name"],
-                temp_dir_path,
-                system_packages=data.get("system_packages"),
-            )
-        except bentoml.exceptions.BentoMLException as e:
-            return web.json_response(
-                {
-                    "result": "error",
-                    "error": f"Build failed: {e.__class__.__name__}: {e}",
-                },
-            )
-
-    if data.get("push", False):
-        credentials = {}
-        if api_key := data.get("api_key"):
-            credentials["api_key"] = api_key
-        if endpoint := data.get("endpoint"):
-            credentials["endpoint"] = endpoint
-        client = bentoml.cloud.BentoCloudClient(**credentials)
-        try:
-            client.bento.push(bento)
-        except bentoml.exceptions.BentoMLException as e:
-            return web.json_response(
-                {
-                    "result": "error",
-                    "error": f"Push failed: {e.__class__.__name__}: {e}",
-                }
-            )
-
-    return web.json_response({"result": "success", "bento": str(bento.tag)})
+    # Simplified - skip model processing
+    if client_id:
+        await send_pack_progress(
+            client_id,
+            stage="finalizing",
+            message="正在完成打包...",
+            percentage=95,
+            level="info",
+        )

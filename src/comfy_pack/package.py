@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .const import COMFYUI_REPO, MODEL_DIR, STRICT_MODE
-from .hash import get_sha256
+# from .hash import get_sha256  # 哈希功能已移除
 from .utils import get_self_git_commit
 
 if TYPE_CHECKING:
@@ -517,7 +517,7 @@ def build_bento(
     else:
         system_packages = system_packages or []
 
-    shutil.copy2(Path(__file__).with_name("service.py"), source_dir / "service.py")
+      # API服务功能已移除，不再复制service.py文件
     snapshot_text = (source_dir / "snapshot.json").read_text()
     setup_script = source_dir / "setup_workspace.sh"
     with Path(__file__).with_name("setup_workspace.sh").open() as f:
